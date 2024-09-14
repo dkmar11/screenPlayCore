@@ -1,0 +1,63 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGENAME = 'screenplay'
+        LOCAL_REPORT_DIR = '/tmp/reports'
+    }
+
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['testing', 'preProd'], description: 'Select the environment to run the tests in')
+        choice(name: 'BRANCH_NAME', choices: ['main', 'develop'], description: 'Branch to build')
+        choice(name: 'TAG', choices: ['api', 'ui'], description: 'Tag to execute')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    checkout([$class: 'GitSCM',
+                              branches: [[name: params.BRANCH_NAME]],
+                              userRemoteConfigs: [[url: 'https://github.com/dkmar11/screenPlayCore.git']]])
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh "docker build -t ${IMAGENAME} ."
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                script {
+                    sh "mkdir -p ${LOCAL_REPORT_DIR}"
+                    sh """
+                    docker run -v ${LOCAL_REPORT_DIR}:/app/target ${IMAGENAME} \
+                    sh -c 'gradle clean test -Denvironment=${params.ENVIRONMENT} -Dtags=@${params.TAG}'
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                cucumber buildStatus: 'null',
+                reportTitle: 'My report',
+                jsonReportDirectory: "${LOCAL_REPORT_DIR}",
+                fileIncludePattern: '**/*cucumber-report.json',
+                sortingMethod: 'ALPHABETICAL'
+            }
+            sh 'docker image prune -a -f'
+            sh 'docker system prune -a -f'
+        }
+        failure {
+            echo 'Pipeline failed.'
+        }
+    }
+}
